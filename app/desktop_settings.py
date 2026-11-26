@@ -389,6 +389,16 @@ class SettingsDialog(QDialog):
         pet=self.pet
         program_supported=program_updates_supported()
         maintenance=self.tab('更新与维护')
+        if sys.platform=='darwin':
+            self.section(maintenance,'GitHub 代理','用于更新检查和素材下载。留空时使用系统网络设置。')
+            proxy=QLineEdit()
+            proxy.setPlaceholderText('127.0.0.1:7897')
+            proxy.setAccessibleName('本机 HTTP 代理')
+            self.fields['github_proxy']=proxy
+            self.field_tabs['github_proxy']=self._building_index
+            self.field_titles['github_proxy']='本机 HTTP 代理'
+            maintenance.addRow('本机 HTTP 代理',proxy)
+            proxy.textChanged.connect(lambda:self.edited('github_proxy'))
         self.section(maintenance,'软件更新' if program_supported else '动画更新',None)
         if program_supported:self.check(maintenance,'update_checks','自动检查更新（不自动下载）')
         if hasattr(pet,'updates'):
@@ -657,6 +667,9 @@ class SettingsDialog(QDialog):
         if values:
             try:
                 self._saving=True
+                if 'github_proxy' in values:
+                    from app_updates import github_proxy_url
+                    values['github_proxy']=github_proxy_url(values['github_proxy'])
                 self.pet.apply_settings(values)
                 for key in values:
                     self.draft.values[key]=copy.deepcopy(self.pet.settings[key]);self.draft.baseline[key]=copy.deepcopy(self.pet.settings[key]);self.draft.conflicts.discard(key)

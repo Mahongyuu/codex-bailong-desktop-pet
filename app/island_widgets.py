@@ -125,7 +125,7 @@ class StatusIsland(QWidget):
         if hasattr(self,'text'):self.refresh()
     def mouseReleaseEvent(self,event):
         window=self.window()
-        if hasattr(window,'card_pointer_release') and window.card_pointer_release():event.accept();return
+        if hasattr(window,'card_pointer_release') and window.card_pointer_release(event):event.accept();return
         if event.button()==Qt.MouseButton.LeftButton:self.expand.emit();event.accept()
     def paintEvent(self,event):
         p=QPainter(self);self.paint_dial(p)
@@ -234,5 +234,5 @@ class MinimalQuota(QuotaSatellite):
         if self.parentWidget().window().card_pointer_move(event):self.setDown(False);event.accept();return
         super().mouseMoveEvent(event)
     def mouseReleaseEvent(self,event):
-        if self.parentWidget().window().card_pointer_release():self.setDown(False);event.accept();return
+        if self.parentWidget().window().card_pointer_release(event):self.setDown(False);event.accept();return
         super().mouseReleaseEvent(event)

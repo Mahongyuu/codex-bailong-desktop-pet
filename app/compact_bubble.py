@@ -3,6 +3,7 @@ from settings_controls import play_animation
 from theme_registry import color as theme_color
 from theme_runtime import set_theme_style,theme_style_source
 import math
+import sys
 import time
 from PySide6.QtCore import Qt,QRectF,QSize,Signal,QTimer,QVariantAnimation,QEasingCurve,QAbstractAnimation
 from PySide6.QtGui import QColor,QFont,QFontMetrics,QPainter,QPen,QTextLayout,QTextOption,QIcon,QPixmap,QPolygonF,QPalette
@@ -675,6 +676,7 @@ class CompactBubble(Bubble):
             header=QWidget(self.content);header.setFixedHeight(27);row=QHBoxLayout(header);row.setContentsMargins(0,0,0,0);row.setSpacing(6)
             row.addWidget(self.status_indicator);self.status_indicator.show()
             self.editor_title=QLabel();row.addWidget(self.editor_title,1)
+            if sys.platform=='darwin':self.editor_title.setCursor(Qt.CursorShape.SizeAllCursor)
             codex=action_button('external','打开 Codex',keyboard=True,hit_size=25);codex.setObjectName('open_codex');codex.clicked.connect(lambda:self.codexRequested.emit());row.addWidget(codex)
             self.editor_codex_button=codex
             close=action_button('collapse','收起到正常卡片',keyboard=True,hit_size=26);close.clicked.connect(self.collapse_to_normal);row.addWidget(close)
@@ -852,6 +854,7 @@ class CompactBubble(Bubble):
         header=self._status_headers.get(self.expanded)
         if header is None:
             header=QWidget(self.content);header.setObjectName('status_header');header.setFixedHeight(27 if self.expanded else 26);row=QHBoxLayout(header);row.setContentsMargins(0,0,0,0);row.setSpacing(6 if self.expanded else 2)
+            if sys.platform=='darwin':header.setCursor(Qt.CursorShape.SizeAllCursor)
             title=CodexWordmarkButton();title.setObjectName('open_codex');title.setFont(font(12,True))
             title.setFixedHeight(26)
             title.setFocusPolicy(Qt.FocusPolicy.NoFocus);title.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1189,7 +1192,7 @@ class CompactBubble(Bubble):
         if self.codex_open is False:self.codex_open=None
         self.evaluate_mode()
     def evaluate_mode(self,now=None):
-        if getattr(self,'_drag_compact_kind',None):return
+        if self._card_dragged or getattr(self,'_drag_compact_kind',None):return
         roaming=getattr(self.owner_pet(),'roaming',None)
         if roaming and getattr(roaming,'compact_owned',False):return
         now=time.monotonic() if now is None else now
@@ -1368,7 +1371,7 @@ class CompactBubble(Bubble):
     def content_geometry(self,size=None,docked=True):
         owner=self.owner_pet();size=self.content.size() if size is None else size
         if owner is None:return QRectF(self.x(),self.y(),size.width(),size.height()).toRect()
-        if hasattr(owner,'card_geometry') and (owner.settings.get('panel_detached') or not owner.settings.get('character_visible',True)):return owner.card_geometry(size)
+        if self.uses_card_anchor():return owner.card_geometry(size)
         edge=getattr(owner,'edge_dock',None)
         if docked and edge and self.is_minimal() and (edge.active or edge.amount>0):
             return edge.card_geometry(size,edge.target_amount if self.size_transition.preparing else None)
@@ -1404,6 +1407,7 @@ class CompactBubble(Bubble):
         super().resizeEvent(event)
         if not self._redrawing and not self._fitting_height:self._position_now()
     def hideEvent(self,event):
+        self._card_press=None;self._card_dragged=False
         if hasattr(self,'size_transition'):self.size_transition.cancel()
         super().hideEvent(event)
     def showEvent(self,event):
@@ -1427,24 +1431,43 @@ class CompactBubble(Bubble):
         owner=self.owner_pet()
         if owner and hasattr(owner,'context_menu'):owner.context_menu(event.globalPos());event.accept()
         else:super().contextMenuEvent(event)
+    def uses_card_anchor(self):
+        owner=self.owner_pet()
+        return bool(owner and hasattr(owner,'card_geometry') and (
+            self._card_dragged or owner.settings.get('panel_detached') or not owner.settings.get('character_visible',True)
+            or getattr(owner,'_materials_missing',False)))
     def card_pointer_press(self,event):
         owner=self.owner_pet()
-        if event.button()==Qt.MouseButton.LeftButton and owner and (owner.settings.get('panel_detached') or not owner.settings.get('character_visible',True)) and not self.size_transition.running:
-            self._card_press=(event.globalPosition().toPoint(),self.pos());self._card_dragged=False;return True
+        if (event.button()==Qt.MouseButton.LeftButton and hasattr(owner,'move_card')
+                and (sys.platform=='darwin' or self.uses_card_anchor())
+                and not self.size_transition.running and not self.size_transition.preparing):
+            pointer=event.globalPosition().toPoint()
+            if not self.uses_card_anchor():
+                target=self.childAt(self.mapFromGlobal(pointer))
+                if target not in (None,self.content,self._header,self.editor_title,self.island,self.minimal_quota):
+                    return False
+            self._card_press=(pointer,self.pos());self._card_dragged=False;return True
         return False
     def card_pointer_move(self,event):
-        if self._card_press and event.buttons()&Qt.MouseButton.LeftButton:
-            point,start=self._card_press;delta=event.globalPosition().toPoint()-point
-            if delta.manhattanLength()>5 or self._card_dragged:
-                self._card_dragged=True;owner=self.owner_pet();owner.move_card(start+delta);return True
+        if event.buttons()&Qt.MouseButton.LeftButton:return self.drag_card_to(event.globalPosition().toPoint())
         return False
-    def card_pointer_release(self):
-        dragged=self._card_dragged;self._card_press=None;self._card_dragged=False
-        if dragged:self.owner_pet().save_settings()
-        return dragged
+    def drag_card_to(self,pointer):
+        if self._card_press:
+            point,start=self._card_press;delta=pointer-point
+            if delta.manhattanLength()>5 or self._card_dragged:
+                self._card_dragged=True;self.owner_pet().move_card(start+delta);return True
+        return False
+    def card_pointer_release(self,event):
+        if event.button()!=Qt.MouseButton.LeftButton:return False
+        if sys.platform=='darwin':self.drag_card_to(event.globalPosition().toPoint())
+        self._card_press=None
+        if not self._card_dragged:return False
+        try:self.owner_pet().finish_card_drag()
+        finally:self._card_dragged=False
+        return True
     def mousePressEvent(self,event):
         if not self.card_pointer_press(event):super().mousePressEvent(event)
     def mouseMoveEvent(self,event):
         if not self.card_pointer_move(event):super().mouseMoveEvent(event)
     def mouseReleaseEvent(self,event):
-        if not self.card_pointer_release():super().mouseReleaseEvent(event)
+        if not self.card_pointer_release(event):super().mouseReleaseEvent(event)

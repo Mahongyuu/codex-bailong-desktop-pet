@@ -590,11 +590,11 @@ class DesktopPet(EnhancedPet):
     def mouseMoveEvent(self,event):
         if self.settings.get('no_move'):return
         if not self._pointer_pressed and not self.dragging:return
-        # User dragging is the highest priority; it can interrupt a task gesture.
-        if event.buttons()&Qt.MouseButton.LeftButton and not self.dragging and hasattr(self,'press_pos'):
-            if (event.globalPosition().toPoint()-self.press_pos).manhattanLength()>8:
-                self.gate.state='idle'
         super().mouseMoveEvent(event)
+    def drag_to(self,pointer):
+        # User dragging is the highest priority; it can interrupt a task gesture.
+        if not self.dragging and (pointer-self.press_pos).manhattanLength()>8:self.gate.state='idle'
+        super().drag_to(pointer)
         if self.dragging:self.gate.state='drag'
     def move_drag_pointer(self,pointer):
         self._drag_pointer=pointer
@@ -619,6 +619,10 @@ class DesktopPet(EnhancedPet):
     def mouseReleaseEvent(self,event):
         if event.button()!=Qt.MouseButton.LeftButton:return
         had_press=self._pointer_pressed or self.dragging
+        was_dragging=self.dragging
+        if sys.platform=='darwin' and self._pointer_pressed and not was_dragging and not self.settings.get('no_move'):
+            # A short Cocoa gesture may have no move event before mouseUp.
+            self.drag_to(event.globalPosition().toPoint())
         self._pointer_pressed=False;self._pointer_epoch+=1
         if not had_press:return
         if self.dragging:
@@ -634,7 +638,7 @@ class DesktopPet(EnhancedPet):
             if len(samples)>1:
                 a,b=samples[0],samples[-1];dt=max(.01,b[0]-a[0]);vx=(b[1]-a[1])/dt;vy=(b[2]-a[2])/dt
             length=math.hypot(vx,vy)
-            if self.settings['drag_physics'] and length>120 and not self.settings['no_move']:
+            if was_dragging and self.settings['drag_physics'] and length>120 and not self.settings['no_move']:
                 factor=min(1,1800/max(1,length));self.velocity=(vx*factor,vy*factor)
                 self._fx,self._fy=float(self.x()),float(self.y());self.throwing=True
                 self.play(self.manifest.get('dragAnimation') or self.idles[0],'throw')
@@ -1068,6 +1072,11 @@ class DesktopPet(EnhancedPet):
         return QRect(x,y,size.width(),size.height())
     def move_card(self,point):
         rect=QRect(point,self.bubble.size());self.remember_card_anchor(rect);self.bubble.move(self.card_geometry(rect.size()).topLeft());self.remember_card_anchor(self.bubble.geometry())
+    def finish_card_drag(self):
+        if (sys.platform=='darwin' and not self.settings['panel_detached']
+                and self.settings['character_visible'] and not self._materials_missing):
+            self.set_option('panel_detached',True)
+        else:self.save_settings()
     def position_bubble(self):
         # EnhancedPet calls this virtual method before DesktopPet has restored
         # the saved independent-card anchor. Initial placement must not create
@@ -1078,7 +1087,7 @@ class DesktopPet(EnhancedPet):
         report=getattr(self.bubble,'report',None)
         if report and getattr(report,'_host_closing',False) and not getattr(getattr(self,'drag_panel',None),'active',False):return
         if self.enhanced_ready and (self.bubble.size_transition.running or self.bubble.size_transition.preparing or self.bubble.size_transition.landing.image is not None):return
-        if self.enhanced_ready and (self.settings.get('panel_detached') or self._materials_missing or not self.settings.get('character_visible',True)):
+        if self.enhanced_ready and self.bubble.uses_card_anchor():
             self.bubble.move(self.card_geometry(self.bubble.content.size()).topLeft())
             if not self.card_surface_visible():self.bubble.hide()
             else:self.sync_attached_panel_stack()

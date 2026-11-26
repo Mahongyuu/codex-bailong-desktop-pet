@@ -1,7 +1,7 @@
 """Read public releases and stage a verified installer; never install silently."""
 from dataclasses import dataclass,replace
 from pathlib import Path,PurePosixPath
-import hashlib,json,os,re,sys,urllib.request,urllib.error,urllib.parse,zipfile,time
+import hashlib,json,os,re,ssl,sys,urllib.request,urllib.error,urllib.parse,zipfile,time
 
 REPOSITORY='Wunsch2048/codex-bailong-desktop-pet'
 API='https://api.github.com/repos/'+REPOSITORY+'/releases/latest'
@@ -98,10 +98,42 @@ class GitHubRedirect(urllib.request.HTTPRedirectHandler):
         if not allowed_redirect(newurl):raise UpdateError('更新下载被重定向到未识别的地址')
         return super().redirect_request(req,fp,code,msg,headers,newurl)
 
+def github_proxy_url(value):
+    value=value.strip() if isinstance(value,str) else ''
+    if not value:return ''
+    match=re.fullmatch(r'(?:http://)?(127\.0\.0\.1|localhost|\[::1\]):([0-9]{1,5})',value,re.IGNORECASE)
+    if not match or not 1<=int(match[2])<=65535:
+        raise ValueError('请输入本机 HTTP 代理地址，例如 127.0.0.1:7897，或留空。')
+    return f'http://{match[1].lower()}:{int(match[2])}'
+
+def configured_github_proxy():
+    if sys.platform!='darwin':return ''
+    from platform_paths import data_dir
+    try:
+        settings=json.loads((data_dir()/'settings.json').read_text(encoding='utf-8'))
+        return github_proxy_url(settings.get('github_proxy',''))
+    except (OSError,ValueError,AttributeError):
+        return ''
+
+class LocalGitHubProxy(urllib.request.ProxyHandler):
+    def proxy_open(self,request,proxy,scheme):
+        # An explicitly configured app proxy takes precedence over system bypass rules.
+        request.set_proxy(urllib.parse.urlsplit(proxy).netloc,'http')
+
 def open_url(url,headers=None):
     if not allowed_redirect(url):raise UpdateError('更新地址不受支持')
     request=urllib.request.Request(url,headers={'User-Agent':'Bailong-Desktop-Updater','Accept':'application/vnd.github+json' if url==API else 'application/octet-stream',**(headers or {})})
-    return urllib.request.build_opener(GitHubRedirect()).open(request,timeout=30)
+    proxy=configured_github_proxy()
+    handlers=[GitHubRedirect()]
+    if proxy:handlers.append(LocalGitHubProxy({'https':proxy}))
+    if sys.platform=='darwin':
+        context=ssl.create_default_context()
+        context.set_alpn_protocols(['http/1.1'])
+        if not context.cert_store_stats()['x509_ca']:
+            # A frozen Python can lack the CA file from its build machine.
+            context.load_verify_locations(cafile='/etc/ssl/cert.pem')
+        handlers.append(urllib.request.HTTPSHandler(context=context))
+    return urllib.request.build_opener(*handlers).open(request,timeout=30)
 
 def check_cancel(cancel):
     if cancel():raise UpdateCancelled('下载已暂停，可稍后继续')

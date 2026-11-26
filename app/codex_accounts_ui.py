@@ -4,11 +4,10 @@ Matches Bailong desktop pet design system:
 - Compact hierarchy, no middle-dot separators
 - Hidden scrollbars with wheel scrolling preserved
 - Distinct primary, danger, and disabled hover states
-- Direct one-click login URL / browser authorization launch
+- Browser authorization launch
 - Non-blocking background worker threads for OAuth and quota operations
 """
 import json
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -439,8 +438,9 @@ class CodexAccountsPane(QWidget):
             f'QPushButton:pressed{{background:#4d3c62;}}'
             f'QPushButton:disabled{{background:{TRACK};color:{MUTED};}}'
         )
-        self.login_btn.setToolTip('拉起系统默认浏览器打开 Codex 官方登录授权页')
-        self.login_btn.clicked.connect(self.login_new_direct)
+        self.login_btn.setToolTip('选择浏览器打开 Codex 官方登录授权页' if sys.platform == 'darwin'
+                                  else '用系统默认浏览器打开 Codex 官方登录授权页')
+        self.login_btn.clicked.connect(self.choose_login_browser)
         toolbar.addWidget(self.login_btn)
 
         self.import_btn = QPushButton('导入账户')
@@ -639,29 +639,44 @@ class CodexAccountsPane(QWidget):
             self.set_busy(False, f'导入失败：{error}', 'error')
             QMessageBox.warning(self, '导入失败', str(error))
 
-    def login_new_direct(self):
-        """Directly launch login in browser without extra confirmation dialogs."""
+    def choose_login_browser(self):
+        if sys.platform != 'darwin':
+            self.login_new_direct()
+            return
+        from codex_browser_login import installed_macos_browsers
+        menu = QMenu(self)
+        choices = {menu.addAction('系统默认浏览器'): None}
+        browsers = installed_macos_browsers()
+        if browsers:
+            menu.addSeparator()
+        for name, path in browsers:
+            choices[menu.addAction(name)] = path
+        selected = menu.exec(self.login_btn.mapToGlobal(QPoint(0, self.login_btn.height() + 2)))
+        if selected in choices:
+            self.login_new_direct(choices[selected])
+        menu.deleteLater()
+
+    def login_new_direct(self, browser=None):
         self.set_busy(True, '正在拉起官方登录通道，请在浏览器中完成授权…', 'loading')
 
         from codex_connection import find_executable, child_environment, cli_command
 
-        temp_dir = tempfile.mkdtemp(prefix='bailong_new_login_')
-
         def worker_fn():
             exe = find_executable()
             env = child_environment()
-            env['CODEX_HOME'] = temp_dir
-            cmd = cli_command(exe, 'login')
-            # Run official login: spawns browser login flow
-            flags = 0x08000000 if sys.platform == 'win32' else 0
-            proc = subprocess.Popen(cmd, env=env, creationflags=flags)
-            proc.wait(timeout=240)
-            target = Path(temp_dir) / 'auth.json'
-            if not target.exists():
-                raise TimeoutError('未在规定时间内检测到浏览器授权凭据，操作已超时取消。')
-            # Read and parse
-            auth_data = json.loads(target.read_text(encoding='utf-8'))
-            return auth_data
+            with tempfile.TemporaryDirectory(prefix='bailong_new_login_') as temp_dir:
+                env['CODEX_HOME'] = temp_dir
+                if browser is None:
+                    flags = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                    subprocess.run(cli_command(exe, 'login'), env=env, creationflags=flags, timeout=240)
+                else:
+                    from codex_browser_login import login_with_browser
+                    cmd = cli_command(exe, 'app-server', '-c', 'cli_auth_credentials_store="file"')
+                    login_with_browser(cmd, env, browser)
+                target = Path(temp_dir) / 'auth.json'
+                if not target.is_file():
+                    raise OSError('未检测到 Codex 浏览器授权凭据。')
+                return json.loads(target.read_text(encoding='utf-8'))
 
         worker = AccountWorker(worker_fn, parent=self)
         self.active_worker = worker
@@ -696,12 +711,11 @@ class CodexAccountsPane(QWidget):
                     self.manager._save_vault()
                 self.refresh_list()
                 self.set_busy(False, f'新账户 [{record["alias"]}] 已成功加入托管！', 'success')
-            finally:
-                shutil.rmtree(temp_dir, ignore_errors=True)
+            except (OSError, ValueError) as error:
+                self.set_busy(False, f'保存账户失败：{error}', 'error')
 
         def on_fail(err):
             self.set_busy(False, f'登录未完成：{err}', 'error')
-            shutil.rmtree(temp_dir, ignore_errors=True)
             QMessageBox.warning(self, '登录未完成', str(err))
 
         worker.finished.connect(on_done)

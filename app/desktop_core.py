@@ -19,7 +19,7 @@ DEFAULTS=dict(schema=2,ui_animation_mode='quality',theme='bailong',theme_accent=
     status_actions=True,status_action_interval=12.,status_response_revision=2,update_checks=True,token_chart_range='all',bubble_mode='auto',
     capsule_action='chatgpt',capsule_website='',talk_min=30.0,talk_max=90.0,talk_quiet=True,
     talk_lines=['忙完记得休息一下。','我在这里陪着你。','今天也一起把小事做好吧。'],
-    facing=1,character='builtin',character_preferences={},chat_follow=False)
+    facing=1,character='builtin',character_preferences={},chat_follow=False,github_proxy='')
 
 def atomic_json(path,value):
     import uuid
@@ -48,6 +48,9 @@ def atomic_json(path,value):
 
 def normalized(raw):
     out=copy.deepcopy(DEFAULTS);out.update(raw if isinstance(raw,dict) else {})
+    from app_updates import github_proxy_url
+    try:out['github_proxy']=github_proxy_url(out['github_proxy'])
+    except ValueError:out['github_proxy']=''
     if out.get('ui_animation_mode') not in ('performance','quality'):out['ui_animation_mode']='quality'
     from theme_registry import theme_id,valid_hex
     out['theme']=theme_id(out.get('theme'))

@@ -287,16 +287,17 @@ class Pet(QWidget):
         self.mousePressEvent(event)
     def mouseMoveEvent(self,event):
         if event.buttons()&Qt.MouseButton.LeftButton and hasattr(self,'press_pos'):
-            pointer=event.globalPosition().toPoint()
-            delta=pointer-self.press_pos
-            if delta.manhattanLength()>8 and not self.dragging:
-                self.dragging=True;self.click_timer.stop();self.last_click=None;self.generation+=1
-                self.bubble_timer.stop()
-                if hasattr(self,'begin_drag_panel'):self.begin_drag_panel()
-                elif not getattr(self,'settings',{}).get('panel_detached'):self.bubble.hide()
-                self.play(self.manifest.get('dragAnimation') or self.idles[0],'drag')
-            if self.dragging:
-                self.move_drag_pointer(pointer)
+            self.drag_to(event.globalPosition().toPoint())
+    def drag_to(self,pointer):
+        delta=pointer-self.press_pos
+        if delta.manhattanLength()>8 and not self.dragging:
+            self.dragging=True;self.click_timer.stop();self.last_click=None;self.generation+=1
+            self.bubble_timer.stop()
+            if hasattr(self,'begin_drag_panel'):self.begin_drag_panel()
+            elif not getattr(self,'settings',{}).get('panel_detached'):self.bubble.hide()
+            self.play(self.manifest.get('dragAnimation') or self.idles[0],'drag')
+        if self.dragging:
+            self.move_drag_pointer(pointer)
     def move_drag_pointer(self,pointer):
         target=self.constrained_position(self.origin+pointer-self.press_pos,pointer)
         if target!=self.pos():
